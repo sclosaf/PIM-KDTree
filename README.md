@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img alt="Language" src="https://img.shields.io/badge/language-C11-blue">
+  <img alt="Language" src="https://img.shields.io/badge/language-C-blue">
   <img alt="Platform" src="https://img.shields.io/badge/platform-UPMEM%20PIM-orange">
   <img alt="Host parallelism" src="https://img.shields.io/badge/host-OpenMP-green">
   <img alt="Build" src="https://img.shields.io/badge/build-Make-lightgrey">
@@ -23,7 +23,7 @@ than by compute.
 
 **Processing-in-Memory (PIM)** attacks that bottleneck by placing small processors
 directly inside the memory modules. This project implements a *k*d-tree that is
-**partitioned across thousands of in-memory processors (DPUs)** on UPMEM hardware,
+**partitioned across many in-memory processors (DPUs)** on UPMEM hardware,
 so that queries and updates run next to the data instead of hauling it to the CPU.
 
 The design follows the algorithm in
@@ -100,8 +100,9 @@ flowchart LR
 │       ├── kdTree/             # DPU-side tree logic
 │       └── environment/
 ├── include/                    # headers mirroring src/
-├── data/                       # binary datasets (100, 1k, 1M, 10M points)
-├── scripts/                    # dataset generator, run helper
+├── data/                       # generated datasets (git-ignored, see below)
+├── scripts/
+│   └── generate.sh             # random dataset generator
 ├── workspace/                  # reference papers
 ├── .env                        # runtime parameters
 └── Makefile
@@ -124,6 +125,18 @@ git clone https://github.com/sclosaf/PIM-KDTree.git
 cd PIM-KDTree
 make            # builds build/main (host) and build/*.dpu (one per kernel)
 ```
+
+### Generate the datasets
+
+Datasets are not stored in the repository. Generate the four standard ones
+(about 44 MB in total, a few seconds):
+
+```bash
+./scripts/generate.sh -a
+```
+
+This creates `data/100Dataset.bin`, `data/1000Dataset.bin`, `data/1MlnDataset.bin`
+and `data/10MlnDataset.bin`, which the CLI loads as `d100`, `d1000`, `d1mln` and `d10mln`.
 
 ### Run
 
@@ -163,7 +176,7 @@ and `help <command>` for its flags.
 | `bench` | `be` | Run benchmarks |
 | `quit` | `q` | Exit |
 
-Datasets: `d100`, `d1000`, `d1mln`, `d10mln`.
+Datasets: `d100`, `d1000`, `d1mln`, `d10mln` (generate them first, see [Generate the datasets](#generate-the-datasets)).
 
 ### Example session
 
@@ -197,13 +210,23 @@ Runtime parameters are read from `.env` and can be changed live with `set`.
 | `chunkSize` | 64 | Transfer chunk size (2^λ) |
 | `stream` / `severity` | `run.log` / `INFO` | Logging target and level (`NONE`…`INFO`) |
 
-### Generating datasets
+### Custom datasets
+
+Datasets are raw little-endian 32-bit floats. The program reads
+`nPoint × dimensions` values, so a file must contain at least that many floats.
 
 ```bash
-./scripts/generate.sh -n 1000000 -m -1000 -M 1000
+./scripts/generate.sh -a                          # all four standard datasets
+./scripts/generate.sh -n 3000000 -o 1MlnDataset.bin   # replace one with 1M 3-D points
+./scripts/generate.sh -n 500 -m -10 -M 10         # data/dataset.bin + data/dataset.txt preview
 ```
 
-Writes `data/dataset.bin` (raw 32-bit floats) and a readable preview in `data/dataset.txt`.
+| Flag | Meaning | Default |
+|---|---|---|
+| `-n <num>` | Number of floats to generate | – |
+| `-m` / `-M` | Value range | −1000 / 1000 |
+| `-o <file>` | Output name inside `data/` | `dataset.bin` |
+| `-a` | Generate all standard datasets | – |
 
 ---
 

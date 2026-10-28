@@ -2,57 +2,52 @@
 
 set -euo pipefail
 
-# Force C locale so numbers use '.' as decimal separator everywhere
 export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
 OUTPUT_DIR="${PROJECT_ROOT}/data"
-OUTPUT_FILE="${OUTPUT_DIR}/dataset.bin"
-TXT_OUTPUT="${OUTPUT_DIR}/dataset.txt"
 
-DEFAULT_MIN_VAL="-1e15"
-DEFAULT_MAX_VAL="1e15"
+DEFAULT_MIN_VAL="-1000"
+DEFAULT_MAX_VAL="1000"
+DEFAULT_OUTPUT="dataset.bin"
 
 NUM_VALUES=""
 MIN_VAL="$DEFAULT_MIN_VAL"
 MAX_VAL="$DEFAULT_MAX_VAL"
+OUTPUT_NAME="$DEFAULT_OUTPUT"
+ALL=false
 
 usage()
 {
-    echo "Usage: $0 -n <num> [-m <min>] [-M <max>]"
-    echo "  -n <num>        Number of floats to generate (required)"
-    echo "  -m <min>        Minimum value (default: $DEFAULT_MIN_VAL)"
-    echo "  -M <max>        Maximum value (default: $DEFAULT_MAX_VAL)"
+    echo "Usage: $0 -n <num> [-m <min>] [-M <max>] [-o <file>]"
+    echo "       $0 -a [-m <min>] [-M <max>]"
+    echo ""
+    echo "  -n <num>     Number of floats to generate"
+    echo "  -m <min>     Minimum value (default: $DEFAULT_MIN_VAL)"
+    echo "  -M <max>     Maximum value (default: $DEFAULT_MAX_VAL)"
+    echo "  -o <file>    Output file name inside data/ (default: $DEFAULT_OUTPUT)"
+    echo "  -a           Generate all standard datasets used by the program:"
+    echo "               100Dataset.bin, 1000Dataset.bin, 1MlnDataset.bin, 10MlnDataset.bin"
     exit 1
 }
 
-while getopts "n:m:M:" opt; do
+while getopts "n:m:M:o:ah" opt; do
     case $opt in
         n) NUM_VALUES="$OPTARG" ;;
         m) MIN_VAL="$OPTARG" ;;
         M) MAX_VAL="$OPTARG" ;;
+        o) OUTPUT_NAME="$OPTARG" ;;
+        a) ALL=true ;;
         *) usage ;;
     esac
 done
-
-if [ -z "$NUM_VALUES" ]; then
-    echo "Error: -n parameter is required"
-    usage
-fi
-
-if ! [[ "$NUM_VALUES" =~ ^[0-9]+$ ]] || [ "$NUM_VALUES" -le 0 ]; then
-    echo "Error: Number of values must be a positive integer"
-    exit 1
-fi
 
 if ! command -v python3 > /dev/null 2>&1; then
     echo "Error: python3 is required"
     exit 1
 fi
 
-# Validate min/max with Python: handles negatives and scientific notation (e.g. -1e15)
 if ! python3 - "$MIN_VAL" "$MAX_VAL" <<'EOF'
 import sys
 try:
@@ -68,12 +63,15 @@ then
     exit 1
 fi
 
-mkdir -p "$OUTPUT_DIR"
-rm -f "$OUTPUT_FILE" "$TXT_OUTPUT"
+generate()
+{
+    local num="$1"
+    local name="$2"
+    local out="${OUTPUT_DIR}/${name}"
 
-echo "Generating $NUM_VALUES float values in range [$MIN_VAL, $MAX_VAL]..."
+    echo "Generating $num floats in [$MIN_VAL, $MAX_VAL] -> data/$name"
 
-python3 - "$NUM_VALUES" "$MIN_VAL" "$MAX_VAL" "$OUTPUT_FILE" <<'EOF'
+    python3 - "$num" "$MIN_VAL" "$MAX_VAL" "$out" <<'EOF'
 import random
 import struct
 import sys
@@ -95,17 +93,52 @@ with open(path, 'wb') as f:
         written += n
 EOF
 
-ACTUAL_SIZE=$(stat -c%s "$OUTPUT_FILE")
-COUNT_TO_READ=$((NUM_VALUES < 100 ? NUM_VALUES : 100))
+    echo "  created ($(stat -c%s "$out") bytes)"
+}
 
-echo "Binary file created: $OUTPUT_FILE ($ACTUAL_SIZE bytes)"
-echo "Extracting first $COUNT_TO_READ values to $TXT_OUTPUT..."
-
+write_preview()
 {
-    echo "# First $COUNT_TO_READ float values from dataset.bin"
-    echo "# Range: [$MIN_VAL, $MAX_VAL]"
-    echo ""
-    od -An -tf4 -w4 -v -N $((COUNT_TO_READ * 4)) "$OUTPUT_FILE" | awk '{print $1}'
-} > "$TXT_OUTPUT"
+    local name="$1"
+    local num="$2"
+    local count=$((num < 100 ? num : 100))
+    local txt="${OUTPUT_DIR}/${name%.bin}.txt"
 
+    {
+        echo "# First $count float values from $name"
+        echo "# Range: [$MIN_VAL, $MAX_VAL]"
+        echo ""
+        od -An -tf4 -w4 -v -N $((count * 4)) "${OUTPUT_DIR}/${name}" | awk '{print $1}'
+    } > "$txt"
+
+    echo "  preview: data/$(basename "$txt")"
+}
+
+mkdir -p "$OUTPUT_DIR"
+
+if [ "$ALL" = true ]; then
+    for spec in "100:100Dataset.bin" "1000:1000Dataset.bin" \
+                "1000000:1MlnDataset.bin" "10000000:10MlnDataset.bin"; do
+        generate "${spec%%:*}" "${spec#*:}"
+    done
+    echo "Done."
+    exit 0
+fi
+
+if [ -z "$NUM_VALUES" ]; then
+    echo "Error: -n or -a is required"
+    usage
+fi
+
+if ! [[ "$NUM_VALUES" =~ ^[0-9]+$ ]] || [ "$NUM_VALUES" -le 0 ]; then
+    echo "Error: Number of values must be a positive integer"
+    exit 1
+fi
+
+if [[ "$OUTPUT_NAME" == */* ]]; then
+    echo "Error: -o takes a file name, not a path (files are written to data/)"
+    exit 1
+fi
+
+generate "$NUM_VALUES" "$OUTPUT_NAME"
+write_preview "$OUTPUT_NAME" "$NUM_VALUES"
 echo "Done."
