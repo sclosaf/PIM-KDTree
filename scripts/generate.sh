@@ -1,5 +1,10 @@
 #!/bin/bash
 
+set -euo pipefail
+
+# Force C locale so numbers use '.' as decimal separator everywhere
+export LC_ALL=C
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -42,48 +47,65 @@ if ! [[ "$NUM_VALUES" =~ ^[0-9]+$ ]] || [ "$NUM_VALUES" -le 0 ]; then
     exit 1
 fi
 
-if ! echo "$MIN_VAL < $MAX_VAL" | bc -l > /dev/null 2>&1; then
-    echo "Error: min must be less than max"
+if ! command -v python3 > /dev/null 2>&1; then
+    echo "Error: python3 is required"
+    exit 1
+fi
+
+# Validate min/max with Python: handles negatives and scientific notation (e.g. -1e15)
+if ! python3 - "$MIN_VAL" "$MAX_VAL" <<'EOF'
+import sys
+try:
+    lo, hi = float(sys.argv[1]), float(sys.argv[2])
+except ValueError:
+    print("Error: min and max must be numbers")
+    sys.exit(2)
+if not lo < hi:
+    print("Error: min must be less than max")
+    sys.exit(1)
+EOF
+then
     exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"
-
-rm -f "$OUTPUT_FILE"
-rm -f "$TXT_OUTPUT"
+rm -f "$OUTPUT_FILE" "$TXT_OUTPUT"
 
 echo "Generating $NUM_VALUES float values in range [$MIN_VAL, $MAX_VAL]..."
 
-python3 -c "
-    import struct
-    import random
-    import sys
+python3 - "$NUM_VALUES" "$MIN_VAL" "$MAX_VAL" "$OUTPUT_FILE" <<'EOF'
+import random
+import struct
+import sys
 
-    num = $NUM_VALUES
-    min_val = $MIN_VAL
-    max_val = $MAX_VAL
+num = int(sys.argv[1])
+min_val = float(sys.argv[2])
+max_val = float(sys.argv[3])
+path = sys.argv[4]
 
-    random.seed()
+random.seed()
+pack = struct.Struct('<f').pack
+chunk = 100000
 
-    with open('$OUTPUT_FILE', 'wb') as f:
-        for _ in range(num):
-            val = random.uniform(min_val, max_val)
-            f.write(struct.pack('f', val))
-"
+with open(path, 'wb') as f:
+    written = 0
+    while written < num:
+        n = min(chunk, num - written)
+        f.write(b''.join(pack(random.uniform(min_val, max_val)) for _ in range(n)))
+        written += n
+EOF
 
-ACTUAL_SIZE=$(stat -c%s "$OUTPUT_FILE" 2>/dev/null)
+ACTUAL_SIZE=$(stat -c%s "$OUTPUT_FILE")
+COUNT_TO_READ=$((NUM_VALUES < 100 ? NUM_VALUES : 100))
 
 echo "Binary file created: $OUTPUT_FILE ($ACTUAL_SIZE bytes)"
-echo "Extracting first $((NUM_VALUES < 100 ? NUM_VALUES : 100)) points to $TXT_OUTPUT..."
+echo "Extracting first $COUNT_TO_READ values to $TXT_OUTPUT..."
 
-COUNT_TO_READ=$((NUM_VALUES < 100 ? NUM_VALUES : 100))
 {
     echo "# First $COUNT_TO_READ float values from dataset.bin"
     echo "# Range: [$MIN_VAL, $MAX_VAL]"
     echo ""
-
-    od -An -tf4 -w4 -v -N $((COUNT_TO_READ * 4)) "$OUTPUT_FILE" | \
-    while read -r val; do
-        echo "$val" | xargs
-    done
+    od -An -tf4 -w4 -v -N $((COUNT_TO_READ * 4)) "$OUTPUT_FILE" | awk '{print $1}'
 } > "$TXT_OUTPUT"
+
+echo "Done."
